@@ -64,13 +64,37 @@ describe("ProfileUploader rate limiting", () => {
     expect(uploader.pendingCount()).toBe(0);
   });
 
-  it("honours a delta-seconds Retry-After header", async () => {
+  it("names a declined payment when the collector says so", async () => {
     const errors: string[] = [];
     const uploader = makeUploader((message) => errors.push(message));
 
     fetchMock.mockResolvedValue(
-      jsonResponse(429, { "retry-after": "120" }),
+      jsonResponse(
+        429,
+        {},
+        {
+          code: "USAGE_LIMIT_REACHED",
+          limit: "observability_events",
+          plan: "pro",
+          reason: "payment_failed",
+        },
+      ),
     );
+    uploader.enqueue(makeWindow(), 100);
+    await vi.runAllTimersAsync();
+
+    // The operator has to be sent to their payment method, not the pricing
+    // page - the plan is intact and paying lifts the pause at once.
+    expect(errors[0]).toContain("rate-limited (429)");
+    expect(errors[0]).toContain("payment on the account was declined");
+    expect(errors[0]).toContain("5 minute(s)");
+  });
+
+  it("honours a delta-seconds Retry-After header", async () => {
+    const errors: string[] = [];
+    const uploader = makeUploader((message) => errors.push(message));
+
+    fetchMock.mockResolvedValue(jsonResponse(429, { "retry-after": "120" }));
     uploader.enqueue(makeWindow(), 100);
     await vi.runAllTimersAsync();
     expect(errors[0]).toContain("2 minute(s)");
@@ -86,9 +110,7 @@ describe("ProfileUploader rate limiting", () => {
     const errors: string[] = [];
     const uploader = makeUploader((message) => errors.push(message));
 
-    fetchMock.mockResolvedValue(
-      jsonResponse(429, { "retry-after": "soon" }),
-    );
+    fetchMock.mockResolvedValue(jsonResponse(429, { "retry-after": "soon" }));
     uploader.enqueue(makeWindow(), 100);
     await vi.runAllTimersAsync();
     expect(errors[0]).toContain("5 minute(s)");

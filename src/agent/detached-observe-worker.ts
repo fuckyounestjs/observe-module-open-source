@@ -1,4 +1,5 @@
 import type { createTelemetrySanitizer } from "./telemetry-wire-contract.js";
+import type { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 
 export const detachedObserveWorker = (
   // The factory's *source* is inlined as this argument when the worker script
@@ -6,6 +7,10 @@ export const detachedObserveWorker = (
   // function cannot import it. Type-only import above; a value import would
   // compile and then throw inside the worker.
   createSanitizer?: typeof createTelemetrySanitizer,
+  // Same arrangement: the helper that turns a 429 body into a sentence
+  // travels as source. Optional so a worker assembled without it still
+  // reports the refusal, just without the reason.
+  describeRefusal?: typeof describeIngestRefusal,
 ) => {
   // This function body is stringified via .toString() and executed as a
   // standalone worker script, so it can't use static ES imports and must
@@ -297,11 +302,22 @@ export const detachedObserveWorker = (
           const pauseMs = rateLimitPauseMs(response);
           rateLimitedUntil = Date.now() + pauseMs;
 
+          // The body says which refusal this is - a quota, a quota frozen by
+          // a declined payment, or a rate cap - and each needs a different
+          // fix from the operator. Parsed defensively: a rate-cap body is
+          // not the quota shape and an older collector sends none at all,
+          // and neither may turn a refusal into an "unreachable" report.
+          const body: unknown = await response.json().catch(() => undefined);
+          const why =
+            typeof describeRefusal === "function"
+              ? describeRefusal(body)
+              : "the account may be out of credits or over budget";
+
           // One line per pause window, so a long depletion reads as one line
           // every few minutes rather than one per flush. The batch is dropped
           // - `finally` clears the buffer - same as every other failure here.
           parentPort.postMessage(
-            `Error: Telemetry rate-limited (429) - the account may be out of credits or over budget. ` +
+            `Error: Telemetry rate-limited (429) - ${why}. ` +
               `Pausing sends for ${Math.round(pauseMs / 60000)} minute(s); batches in the meantime are dropped.`,
           );
           return true;

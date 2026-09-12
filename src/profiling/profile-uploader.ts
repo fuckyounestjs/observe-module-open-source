@@ -1,3 +1,4 @@
+import { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 import { ProfileWindow } from "./cpu-profiler.service.js";
 
 /**
@@ -150,8 +151,11 @@ export class ProfileUploader {
         // carries the freshest profiles the two-window cap kept.
         const pauseMs = this.rateLimitPauseMs(response);
         this.rateLimitedUntil = Date.now() + pauseMs;
+        // Same reading of the body as the telemetry worker, so the two halves
+        // of the agent describe one account state in one way.
+        const body: unknown = await response.json().catch(() => undefined);
         this.options.onError?.(
-          `profile upload rate-limited (429) - the account may be out of credits or over budget; ` +
+          `profile upload rate-limited (429) - ${describeIngestRefusal(body)}; ` +
             `pausing uploads for ${Math.round(pauseMs / 60000)} minute(s)`,
         );
         return false;

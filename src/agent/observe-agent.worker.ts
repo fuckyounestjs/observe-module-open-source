@@ -16,6 +16,7 @@ import {
   SpanSliceRecorder,
 } from "../profiling/span-slice-recorder.js";
 import { NodeRuntimeMetricsService } from "../services/node-runtime-metrics.service.js";
+import { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 import { detachedObserveWorker } from "./detached-observe-worker.js";
 import { ObserveAgentSharedBuffer } from "./observe-agent.shared-buffer.js";
 import {
@@ -238,12 +239,13 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
 
   initializeWorker() {
     this.warnIfCredentialsSentInClear();
-    // The sanitizer factory is inlined as the worker function's argument: the
-    // worker is eval'd source with no module scope, so code it needs has to
-    // travel as source, and data (the wire shapes are plain JSON) as
-    // `workerData`. The factory is written self-contained for exactly this.
+    // The sanitizer factory and the refusal describer are inlined as the
+    // worker function's arguments: the worker is eval'd source with no module
+    // scope, so code it needs has to travel as source, and data (the wire
+    // shapes are plain JSON) as `workerData`. Both are written self-contained
+    // for exactly this.
     this.worker = new Worker(
-      `(${detachedObserveWorker.toString()})(${createTelemetrySanitizer.toString()})`,
+      `(${detachedObserveWorker.toString()})(${createTelemetrySanitizer.toString()}, ${describeIngestRefusal.toString()})`,
       {
         eval: true,
         workerData: {
