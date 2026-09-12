@@ -64,8 +64,9 @@ export interface CreateObserveModuleOptions {
    * For HTTP protocols, the request object is passed to the function.
    * For non-HTTP protocols, the request object will be contextual and may not be available.
    * The default implementation uses the 'x-request-id' header if available,
-   * or generates a random UUID if the header is not present.
-   * @default (req) => req.headers['x-request-id'] || randomUUID()
+   * or mints a time-ordered UUID (version 7) if the header is not present -
+   * an id the collector can locate in time without a scan.
+   * @default (req) => req.headers['x-request-id'] || uuidv7()
    */
   traceIdGenerator?: (req: unknown) => string;
 

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { AsyncLocalStorage } from "async_hooks";
 import type { Job, Processor } from "bullmq";
-import { randomUUID } from "crypto";
+import { uuidv7 } from "../utils/uuid-v7.util.js";
 import { ObserveAgentSharedBuffer } from "../agent/observe-agent.shared-buffer.js";
 import {
   JobSnapshot,
@@ -144,7 +144,7 @@ export class QueueObserveAgentService<Store extends Record<string, unknown>> {
 
             return processor(job);
           }
-          const traceId = randomUUID();
+          const traceId = uuidv7();
           store.set(this.options.traceIdKey, traceId);
 
           if (this.options.jobs?.setAttributes) {

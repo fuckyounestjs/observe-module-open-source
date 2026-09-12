@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { AsyncLocalStorage } from "async_hooks";
-import { randomUUID } from "crypto";
+import { uuidv7 } from "../utils/uuid-v7.util.js";
 import { ObserveAgentSharedBuffer } from "../agent/observe-agent.shared-buffer.js";
 import {
   JobSnapshot,
@@ -229,11 +229,11 @@ export class ScheduleObserveAgentService<
           return methodRef.call(instance, ...args);
         }
 
-        const traceId = randomUUID();
+        const traceId = uuidv7();
         store.set(this.options.traceIdKey, traceId);
 
         // Every firing is its own job run, so every firing gets its own id.
-        const id = randomUUID();
+        const id = uuidv7();
 
         if (this.options.jobs?.setAttributes) {
           const attributes = this.options.jobs.setAttributes({

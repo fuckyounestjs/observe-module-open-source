@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { uuidv7 } from "./uuid-v7.util.js";
 
 /**
  * What an inbound `x-request-id` must look like to be adopted as the trace id.
@@ -22,5 +22,6 @@ export function defaultTraceIdGenerator(req: unknown) {
       return requestId;
     }
   }
-  return randomUUID();
+  // Minted here, so it can carry its time - see uuidv7.
+  return uuidv7();
 }
