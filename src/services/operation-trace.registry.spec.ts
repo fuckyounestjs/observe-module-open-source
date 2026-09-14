@@ -10,6 +10,7 @@ import {
   setActiveSliceRecorder,
   SpanSliceRecorder,
 } from "../profiling/span-slice-recorder.js";
+import { SPAN_COLLAPSED_TAG } from "./collapse-repeated-spans.util.js";
 import { OperationTraceRegistry } from "./operation-trace.registry.js";
 
 /**
@@ -246,7 +247,9 @@ describe("OperationTraceRegistry", () => {
 
       const snapshot = await registry.pluckSnapshot("t6c");
       expect(
-        snapshot!.traces.map((node) => ("name" in node ? node.name : node.methodKey)),
+        snapshot!.traces.map((node) =>
+          "name" in node ? node.name : node.methodKey,
+        ),
       ).toEqual(["intercept", "manual-step"]);
     });
 
@@ -811,6 +814,183 @@ describe("OperationTraceRegistry", () => {
       } finally {
         setActiveSliceRecorder(null);
       }
+    });
+  });
+
+  describe("repeated siblings", () => {
+    /** Opens and closes `count` calls of one frame under `callerId`. */
+    const repeat = (
+      traceId: string,
+      callerId: string | undefined,
+      className: string,
+      methodKey: string,
+      count: number,
+    ) => {
+      for (let i = 0; i < count; i++) {
+        const id = registry.internalStartTraceStep(
+          traceId,
+          className,
+          methodKey,
+          callerId,
+        );
+        registry.internalEndTraceStep(traceId, id, className, methodKey, id);
+      }
+    };
+
+    type Pipe = {
+      duration: number;
+      tags?: Record<string, unknown>;
+      error?: unknown;
+      spanId?: string;
+    };
+    const pipesUnder = (node: { children?: unknown[] }) =>
+      (node.children ?? []).filter(
+        (child) =>
+          (child as { className: string }).className === "ValidationPipe",
+      ) as Pipe[];
+    const countOf = (pipe: Pipe) => pipe.tags?.[SPAN_COLLAPSED_TAG];
+
+    it("collapses repeated siblings on the way out, with the defaults in force", async () => {
+      startRequest("c1");
+      const root = registry.internalStartTraceStep(
+        "c1",
+        "OrdersResolver",
+        "orders",
+        undefined,
+      );
+      // Interleaved, as a pipe run per argument is with the resolver calls
+      // it validates for.
+      for (let i = 0; i < 30; i++) {
+        repeat("c1", root, "ValidationPipe", "transform", 1);
+        repeat("c1", root, "PricingService", "quote", 1);
+      }
+      registry.internalEndTraceStep(
+        "c1",
+        root,
+        "OrdersResolver",
+        "orders",
+        root,
+      );
+      registry.endTrace("c1");
+
+      const snapshot = await registry.pluckSnapshot("c1");
+      const [operation] = snapshot!.traces as Array<{ children?: unknown[] }>;
+
+      // Three kept whole plus one aggregate, out of thirty.
+      const pipes = pipesUnder(operation);
+      expect(pipes).toHaveLength(4);
+      const collapsed = pipes.filter((pipe) => countOf(pipe) !== undefined);
+      expect(collapsed).toHaveLength(1);
+      expect(countOf(collapsed[0])).toBe(27);
+      expect(collapsed[0]).toMatchObject({
+        name: "ValidationPipe.transform ×27",
+        origin: "auto",
+        startOffset: expect.any(Number),
+        spanId: expect.any(String),
+      });
+      // The kept ones are the slowest, so each outlasts the average of the rest.
+      const mean = collapsed[0].duration / 27;
+      for (const kept of pipes.filter((pipe) => countOf(pipe) === undefined)) {
+        expect(kept.duration).toBeGreaterThanOrEqual(mean);
+      }
+    });
+
+    it("ships every span when collapsing is switched off", async () => {
+      registry.configureSpanCollapse(undefined);
+      startRequest("c2");
+      const root = registry.internalStartTraceStep(
+        "c2",
+        "OrdersResolver",
+        "orders",
+        undefined,
+      );
+      repeat("c2", root, "ValidationPipe", "transform", 30);
+      registry.internalEndTraceStep(
+        "c2",
+        root,
+        "OrdersResolver",
+        "orders",
+        root,
+      );
+      registry.endTrace("c2");
+
+      const snapshot = await registry.pluckSnapshot("c2");
+      const [operation] = snapshot!.traces as Array<{ children?: unknown[] }>;
+
+      expect(pipesUnder(operation)).toHaveLength(30);
+    });
+
+    it("applies configured settings", async () => {
+      registry.configureSpanCollapse({ threshold: 5, keepSlowest: 1 });
+      startRequest("c3");
+      const root = registry.internalStartTraceStep(
+        "c3",
+        "OrdersResolver",
+        "orders",
+        undefined,
+      );
+      repeat("c3", root, "ValidationPipe", "transform", 10);
+      registry.internalEndTraceStep(
+        "c3",
+        root,
+        "OrdersResolver",
+        "orders",
+        root,
+      );
+      registry.endTrace("c3");
+
+      const snapshot = await registry.pluckSnapshot("c3");
+      const [operation] = snapshot!.traces as Array<{ children?: unknown[] }>;
+
+      const pipes = pipesUnder(operation);
+      expect(pipes).toHaveLength(2);
+      expect(countOf(pipes.find((pipe) => countOf(pipe) !== undefined)!)).toBe(
+        9,
+      );
+    });
+
+    it("keeps a failed instance whole", async () => {
+      startRequest("c4");
+      const root = registry.internalStartTraceStep(
+        "c4",
+        "OrdersResolver",
+        "orders",
+        undefined,
+      );
+      repeat("c4", root, "ValidationPipe", "transform", 25);
+      const failing = registry.internalStartTraceStep(
+        "c4",
+        "ValidationPipe",
+        "transform",
+        root,
+      );
+      registry.internalEndTraceStep(
+        "c4",
+        failing,
+        "ValidationPipe",
+        "transform",
+        failing,
+        new BadRequestException("factor must be positive"),
+      );
+      registry.internalEndTraceStep(
+        "c4",
+        root,
+        "OrdersResolver",
+        "orders",
+        root,
+      );
+      registry.endTrace("c4");
+
+      const snapshot = await registry.pluckSnapshot("c4");
+      const [operation] = snapshot!.traces as Array<{ children?: unknown[] }>;
+
+      const pipes = pipesUnder(operation);
+      expect(pipes.find((pipe) => pipe.spanId === failing)).toMatchObject({
+        error: true,
+      });
+      expect(countOf(pipes.find((pipe) => countOf(pipe) !== undefined)!)).toBe(
+        22,
+      );
     });
   });
 

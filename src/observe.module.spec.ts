@@ -3,8 +3,11 @@ import type {
   ObserveOptions,
   ObserveOptionsFactory,
 } from "./interfaces/observe-options.interface.js";
+import { Test } from "@nestjs/testing";
 import { createObserveModule } from "./observe.module.js";
 import { OBSERVE_OPTIONS } from "./observe.constants.js";
+import { DEFAULT_SPAN_COLLAPSE } from "./services/collapse-repeated-spans.util.js";
+import { OperationTraceRegistry } from "./services/operation-trace.registry.js";
 
 /**
  * The instance decorator handed to NestFactory. Bootstrap passes *every*
@@ -249,5 +252,71 @@ describe("createObserveModule#forRootAsync", () => {
         /requires one of "useFactory", "useClass" or "useExisting"/,
       );
     });
+  });
+});
+
+/**
+ * The registry is built before the container exists, so `spanCollapse` can
+ * only reach it through the provider that hands it to the container. These
+ * boot a real module for each configuration shape and read the settings back
+ * off the instance the container resolved.
+ */
+describe("createObserveModule#spanCollapse wiring", () => {
+  const credentials = { appKey: "key", appSecret: "secret", serviceId: "svc" };
+
+  const settingsOf = (registry: OperationTraceRegistry) =>
+    (registry as unknown as { spanCollapse: unknown }).spanCollapse;
+
+  const bootWith = async (module: unknown) => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [module as never],
+    }).compile();
+    return moduleRef.get(OperationTraceRegistry, { strict: false });
+  };
+
+  it("applies the defaults when forRoot names nothing", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(ObserveModule.forRoot(credentials));
+
+    expect(settingsOf(registry)).toEqual(DEFAULT_SPAN_COLLAPSE);
+  });
+
+  it("passes forRoot settings through to the registry", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(
+      ObserveModule.forRoot({
+        ...credentials,
+        spanCollapse: { threshold: 50, keepSlowest: 5 },
+      }),
+    );
+
+    expect(settingsOf(registry)).toEqual({ threshold: 50, keepSlowest: 5 });
+  });
+
+  it("switches collapsing off through forRoot", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(
+      ObserveModule.forRoot({ ...credentials, spanCollapse: false }),
+    );
+
+    expect(settingsOf(registry)).toBeUndefined();
+  });
+
+  it("waits for asynchronously resolved options", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(
+      ObserveModule.forRootAsync({
+        useFactory: async () => ({
+          ...credentials,
+          spanCollapse: { threshold: 7, keepSlowest: 1 },
+        }),
+      }),
+    );
+
+    expect(settingsOf(registry)).toEqual({ threshold: 7, keepSlowest: 1 });
   });
 });

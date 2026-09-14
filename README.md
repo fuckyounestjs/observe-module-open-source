@@ -113,6 +113,58 @@ export class ObserveConfig implements ObserveOptionsFactory {
 }
 ```
 
+## Repeated spans
+
+Every provider is instrumented by default, framework-owned ones included, and
+some of them run in loops the application never wrote. A `ValidationPipe`
+registered through `APP_PIPE` runs once per argument of every GraphQL field
+resolver, so a single list query produces hundreds or thousands of identical
+sibling spans under the operation - each of them a metered event, and together
+saying nothing a count would not.
+
+The agent collapses those before a trace leaves the process. When more than
+`threshold` siblings under one parent share a class and method:
+
+- the slowest `keepSlowest` of them stay as ordinary spans,
+- any instance that errored stays as an ordinary span, whatever its duration,
+- the rest are replaced by one node that carries how many calls it stands for
+  and the **sum** of their durations.
+
+Nothing is skipped outright and no duration cut-off is involved: what
+validation costs is specific to each application, and the calls that explain a
+slow request are exactly the ones kept whole. The collapsed node is metered as
+a single event.
+
+```ts
+ObserveModule.forRoot({
+  // ...
+  spanCollapse: { threshold: 20, keepSlowest: 3 }, // the defaults
+  // spanCollapse: false, // ship every span
+});
+```
+
+What a collapsed node means:
+
+- Its `observe.collapsed` tag is the number of calls it replaces, and its name
+  reads `ValidationPipe.transform ×27` so a waterfall shows an aggregate rather
+  than one more call.
+- `duration` is the sum of the replaced calls' durations, not the wall-clock
+  span between the first and the last. That is what keeps the parent's self
+  time - its duration minus its children's - exactly what it was.
+- `startOffset` is the earliest replaced call's, and the node sits where that
+  call sat among its siblings. Ordering _among_ the replaced calls is lost,
+  which is acceptable for calls that are identical by construction.
+- The replaced calls' own children are carried onto the node, so the time of
+  whatever they called is still attributed to the class that spent it; a
+  repeated frame beneath them collapses in turn.
+- Tags of the replaced calls are dropped. Manual spans are never collapsed.
+
+The wire format is unchanged: the count travels inside `t` (tags), next to `n`
+name, `o` origin, `d` duration, `e` error, `c` className, `m` methodKey, `ch`
+children, `s` spanId and `so` startOffset. A collector that does not know the
+tag stores it like any other and attributes the node as one call of its class
+rather than as the number it carries.
+
 ## Optional peer dependencies
 
 Protocol integrations are only loaded when you use them, and their packages are optional peers:

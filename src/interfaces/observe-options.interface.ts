@@ -286,6 +286,53 @@ export interface ObserveOptions {
   maxTracesPerBatch?: number;
 
   /**
+   * Collapses repeated sibling spans before a trace is shipped.
+   *
+   * A provider the framework calls in a loop - the canonical case is a
+   * `ValidationPipe` registered through `APP_PIPE`, which runs once per
+   * argument of every GraphQL field resolver - produces thousands of
+   * near-identical spans under one parent for a single list query. Every one
+   * of them is a metered event, and together they say nothing a count would
+   * not.
+   *
+   * When more than `threshold` siblings under the same parent share a class
+   * and method, the slowest `keepSlowest` of them and any that errored stay
+   * as ordinary spans, and the rest are replaced by a single node carrying
+   * their count (as the `observe.collapsed` tag) and their *summed*
+   * duration. That sum is what keeps the parent's self time exact, and the
+   * children of the collapsed calls are carried across so class attribution
+   * beneath them survives too. The collapsed node is metered as one event.
+   *
+   * Nothing is skipped and no duration threshold is involved, deliberately:
+   * what validation costs is application-specific, and the outliers that
+   * explain a slow request are exactly the instances kept whole. What is lost
+   * is the relative ordering of the collapsed calls among themselves - the
+   * node takes the earliest call's `startOffset` - which is acceptable for
+   * calls that are identical by construction.
+   *
+   * On by default. Set to `false` to ship every span.
+   *
+   * @default { threshold: 20, keepSlowest: 3 }
+   */
+  spanCollapse?:
+    | false
+    | {
+        /**
+         * Number of siblings sharing a class and method that a parent may
+         * hold before the surplus is collapsed. Collapsing starts at
+         * `threshold + 1`.
+         * @default 20
+         */
+        threshold?: number;
+        /**
+         * How many of the slowest instances to keep as individual spans when
+         * a group collapses. Errored instances are kept in addition to these.
+         * @default 3
+         */
+        keepSlowest?: number;
+      };
+
+  /**
    * Whether to forward logs to the Observe APM.
    * If true, logs will be forwarded to the Agent for correlation with traces.
    * @default false

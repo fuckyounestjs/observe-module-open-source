@@ -32,6 +32,7 @@ import { RpcObserveAgentService } from "./protocols/rpc-observe-agent.service.js
 import { ScheduleObserveAgentService } from "./protocols/schedule-observe-agent.service.js";
 import { LoggerPatcherService } from "./services/logger-patcher.service.js";
 import { NodeRuntimeMetricsService } from "./services/node-runtime-metrics.service.js";
+import { resolveSpanCollapseSettings } from "./services/collapse-repeated-spans.util.js";
 import { OperationTraceRegistry } from "./services/operation-trace.registry.js";
 import { StdoutForwarderService } from "./services/stdout-forwarder.service.js";
 import { TraceSamplerService } from "./services/trace-sampler.service.js";
@@ -83,7 +84,17 @@ export function createObserveModule<Store extends Record<string, unknown>>(
       },
       {
         provide: OperationTraceRegistry,
-        useValue: operationTraceRegistry,
+        // The instance already exists (the instrumentation hook below holds
+        // it), so this is the one moment the resolved `ObserveOptions` and the
+        // registry meet: `spanCollapse` is applied here. Optional because
+        // `ASSERT_MODULE_OPTIONS` owns the missing-options error.
+        useFactory: (observeOptions?: ObserveModuleOptionsWithDefaults) => {
+          operationTraceRegistry.configureSpanCollapse(
+            resolveSpanCollapseSettings(observeOptions?.spanCollapse),
+          );
+          return operationTraceRegistry;
+        },
+        inject: [{ token: OBSERVE_OPTIONS, optional: true }],
       },
       TracerService,
       LoggerPatcherService,

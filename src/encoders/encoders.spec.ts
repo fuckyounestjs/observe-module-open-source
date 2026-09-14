@@ -271,6 +271,45 @@ describe("RequestSnapshotEncoder", () => {
     // for no information.
     expect(encoded.t[0]).not.toHaveProperty("ch");
   });
+
+  it("ships a collapsed node with the keys the contract already declares", () => {
+    // As the registry hands it over: `startTimestamp` already stripped.
+    const asRegistryEmitsIt = { ...(snapshot as Record<string, any>) };
+    delete asRegistryEmitsIt.startTimestamp;
+    const collapsed = {
+      ...asRegistryEmitsIt,
+      traces: [
+        {
+          origin: "auto",
+          className: "ValidationPipe",
+          methodKey: "transform",
+          name: "ValidationPipe.transform ×27",
+          tags: { "observe.collapsed": 27 },
+          duration: 40,
+          startOffset: 2,
+          spanId: "s1",
+        },
+      ],
+    } as never;
+
+    const encoded = RequestSnapshotEncoder.encode(collapsed) as Record<
+      string,
+      any
+    >;
+
+    // The count rides in `t`, so the node introduces no key of its own and an
+    // older collector accepts it unchanged.
+    expect(encoded.t[0].t).toEqual({ "observe.collapsed": 27 });
+    expect(Object.keys(encoded.t[0]).sort()).toEqual(
+      ["c", "d", "m", "n", "o", "s", "so", "t"].sort(),
+    );
+    expect(
+      validateTelemetryPayload(
+        { serviceId: "svc", snapshots: [encoded] },
+        { forbidUnknown: true },
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("JobSnapshotEncoder", () => {

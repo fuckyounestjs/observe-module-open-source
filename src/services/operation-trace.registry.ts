@@ -13,6 +13,11 @@ import { TraceSpanDelegate } from "../trace-span.delegate.js";
 import { KeyOf } from "../types/key-of.type.js";
 import { CodeFrame, collectCodeFrames } from "../utils/source-context.util.js";
 import { CALLER_METADATA_KEY } from "../observe.constants.js";
+import {
+  collapseRepeatedSpans,
+  DEFAULT_SPAN_COLLAPSE,
+  SpanCollapseSettings,
+} from "./collapse-repeated-spans.util.js";
 
 const SNAPSHOT_COMPLETION_TIMEOUT_MS = 1000;
 
@@ -65,6 +70,13 @@ export class OperationTraceRegistry {
    * would bury everything else in the log. Full text once, one line after.
    */
   private hasReportedMissingInstrumentation = false;
+  /**
+   * Applied to every tree as it is plucked. Defaults are live from
+   * construction rather than waiting for `configureSpanCollapse`, so a
+   * registry the module has not (yet) configured still bounds what it ships.
+   */
+  private spanCollapse: SpanCollapseSettings | undefined =
+    DEFAULT_SPAN_COLLAPSE;
 
   constructor(
     private readonly als: AsyncLocalStorage<
@@ -72,6 +84,16 @@ export class OperationTraceRegistry {
     >,
     private readonly sourceContext: CreateObserveModuleOptions["sourceContext"] = true,
   ) {}
+
+  /**
+   * Sets how repeated siblings are collapsed on the way out, or switches it
+   * off with `undefined`. Called by the module once `ObserveOptions` have
+   * resolved, which is after this instance exists: the registry is built
+   * before the DI container so the instrumentation hook can hold it.
+   */
+  configureSpanCollapse(settings: SpanCollapseSettings | undefined): void {
+    this.spanCollapse = settings;
+  }
 
   /**
    * Builds the error payload attached to a span or snapshot, including the source
@@ -610,6 +632,17 @@ export class OperationTraceRegistry {
       delete bookkeeping.refsCounter;
       delete bookkeeping.refsMarkedAsComplete;
       delete bookkeeping.errorStatusCode;
+
+      // Last, on the finished tree: every span has closed by now, so a group
+      // is judged on its complete membership and durations, and nothing that
+      // reads the tree afterwards - the encoder, the buffer - sees the
+      // uncollapsed one.
+      if (this.spanCollapse) {
+        snapshot.traces = collapseRepeatedSpans(
+          snapshot.traces,
+          this.spanCollapse,
+        );
+      }
       return snapshot;
     }
     return undefined;
