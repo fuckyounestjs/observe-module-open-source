@@ -18,6 +18,7 @@ import {
 import { NodeRuntimeMetricsService } from "../services/node-runtime-metrics.service.js";
 import { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 import { detachedObserveWorker } from "./detached-observe-worker.js";
+import { parseDegradedMessage } from "./degraded-ingest.protocol.js";
 import { ObserveAgentSharedBuffer } from "./observe-agent.shared-buffer.js";
 import {
   createTelemetrySanitizer,
@@ -280,6 +281,12 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
   }
 
   handleMessage(msg: string) {
+    const degraded = parseDegradedMessage(msg);
+    if (degraded !== null) {
+      this.applyDegraded(degraded);
+      return;
+    }
+
     if (msg.includes("Error:")) {
       this.logger.error(msg);
       return;
@@ -288,6 +295,39 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
     if (this.options.debug) {
       this.logger.debug(msg);
     }
+  }
+
+  /**
+   * Whether the last reply said the collector is discarding spans.
+   *
+   * Kept beside the log rather than read from the buffer so the notice fires
+   * once per transition: an account sits in this state for days, and a line
+   * per flush would bury the one thing worth reading.
+   */
+  private reportedDegraded = false;
+
+  /**
+   * Stops sending trace trees the collector has told us it is throwing away,
+   * and says so once.
+   *
+   * Said at `warn` rather than `debug`: the application is still being
+   * observed, the waterfalls are not being kept, and a developer who finds
+   * that out by opening a trace and seeing nothing has been let down by an
+   * agent that knew.
+   */
+  private applyDegraded(degraded: boolean) {
+    this.observeAgentSharedBuffer.setDegraded(degraded);
+
+    if (degraded && !this.reportedDegraded) {
+      this.logger.warn(
+        "Observe: this account has spent its monthly event allowance. Requests, jobs " +
+          "and errors are still being recorded; spans are not, so traces will show no " +
+          "waterfall. The agent has stopped sending them. See /dashboard/billing.",
+      );
+    } else if (!degraded && this.reportedDegraded) {
+      this.logger.log("Observe: spans are being recorded again.");
+    }
+    this.reportedDegraded = degraded;
   }
 
   handleError(error: Error) {

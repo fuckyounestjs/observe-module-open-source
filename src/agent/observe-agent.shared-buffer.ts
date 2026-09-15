@@ -1,3 +1,8 @@
+import {
+  countTraceNodes,
+  DEGRADED_TTL_MS,
+  isNotableSnapshot,
+} from "./degraded-ingest.protocol.js";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Counter, Gauge, Summary } from "../custom-metrics/index.js";
 import {
@@ -123,6 +128,17 @@ interface AgentMetricsPayload {
    */
   serviceVersion?: string;
   /**
+   * Spans built and then withheld because the collector reported this
+   * account's ingestion is reduced.
+   *
+   * Reported because it cannot be inferred: the trees are not sent, so the
+   * collector has no way to count the volume it is meant to be measuring the
+   * account against. Without it, upgrading the agent would quietly earn an
+   * account a longer reduced window - free service as a reward for behaving
+   * well, which is the wrong incentive to build.
+   */
+  truncatedSpans?: number;
+  /**
    * Whether this agent is forwarding logs.
    *
    * Reported on every batch rather than inferred from `logs` being present: a
@@ -225,6 +241,15 @@ export class ObserveAgentSharedBuffer {
 
     const encodedSnapshot: EncodedRequestSnapshot =
       RequestSnapshotEncoder.encode(snapshot);
+    if (this.isDegraded() && !isNotableSnapshot(encodedSnapshot)) {
+      // The collector is discarding these on arrival; shipping them costs the
+      // application its own CPU and bandwidth for nothing. The snapshot still
+      // goes - the request, its duration and its error are what the charts
+      // are built from, and those are still being kept - and the count goes
+      // with it, because it is the only record these existed.
+      this.countTruncated(encodedSnapshot.t);
+      delete encodedSnapshot.t;
+    }
     this._mainThreadBuffer.snapshots.push(encodedSnapshot);
   }
 
@@ -253,7 +278,55 @@ export class ObserveAgentSharedBuffer {
 
     const encodedJobSnapshot: EncodedJobSnapshot =
       JobSnapshotEncoder.encode(jobSnapshot);
+    if (this.isDegraded() && !isNotableSnapshot(encodedJobSnapshot)) {
+      // A job carries no status code, so the same rule grades it on its error
+      // and its duration - which is what the collector does with it too.
+      this.countTruncated(encodedJobSnapshot.t);
+      delete encodedJobSnapshot.t;
+    }
     this._mainThreadBuffer.jobs.push(encodedJobSnapshot);
+  }
+
+  /**
+   * Until when the collector's last answer says spans are being discarded.
+   *
+   * Zero means "not degraded", which is also where a fresh process starts:
+   * the state is learned from a reply, so the first batch after start-up
+   * always carries its spans. One batch of wasted trees is the price of not
+   * persisting a guess across restarts.
+   */
+  private degradedUntil = 0;
+
+  /**
+   * Records what the collector said about the last batch.
+   *
+   * Refreshed on every reply rather than latched, so the window slides while
+   * the account stays over its allowance and lapses on its own once it does
+   * not - the collector has no way to announce the end of it, and an upgrade
+   * must not need a restart to take effect.
+   */
+  setDegraded(degraded: boolean) {
+    this.degradedUntil = degraded ? Date.now() + DEGRADED_TTL_MS : 0;
+  }
+
+  isDegraded(): boolean {
+    return this.degradedUntil > Date.now();
+  }
+
+  /**
+   * Adds a withheld tree to the batch's reported truncation.
+   *
+   * Every node, not every root: the collector meters a trace by its node
+   * count, so a number that counted roots would under-report by the shape of
+   * the tree and the account would be measured against a fraction of what it
+   * actually produced.
+   */
+  private countTruncated(traces: unknown) {
+    if (!this._mainThreadBuffer) {
+      return;
+    }
+    this._mainThreadBuffer.truncatedSpans =
+      (this._mainThreadBuffer.truncatedSpans ?? 0) + countTraceNodes(traces);
   }
 
   isBufferLocked() {

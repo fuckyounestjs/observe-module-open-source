@@ -1,3 +1,4 @@
+import { DEGRADED_MESSAGE_PREFIX } from "./degraded-ingest.protocol.js";
 import type { createTelemetrySanitizer } from "./telemetry-wire-contract.js";
 import type { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 
@@ -335,6 +336,28 @@ export const detachedObserveWorker = (
         );
         return true;
       }
+
+      /*
+       * The collector answers 200 while it is discarding the spans in the
+       * batch - an account past its plan's allowance keeps its requests, jobs
+       * and errors and loses the trace trees underneath them. Nothing in the
+       * status says so, so the body is the only way to learn it, and an agent
+       * that does not look keeps building, serializing and gzipping trees
+       * that die on arrival.
+       *
+       * Read defensively and treated as absent on anything unexpected: an
+       * older collector returns no body at all, and a parse failure here must
+       * never turn a successful send into a reported failure.
+       */
+      const accepted: unknown = await response.json().catch(() => undefined);
+      const degraded =
+        typeof accepted === "object" &&
+        accepted !== null &&
+        (accepted as { degraded?: unknown }).degraded === true;
+
+      // A protocol line, not prose: the parent keys off the prefix and the
+      // value, and is the side that decides what to do about it.
+      parentPort.postMessage(`${DEGRADED_MESSAGE_PREFIX}${degraded}`);
 
       parentPort.postMessage(
         "Tracing and instrumentation data sent successfully",
