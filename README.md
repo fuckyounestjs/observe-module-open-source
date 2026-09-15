@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://observe-demo.nestjs.com"><b>Live demo</b></a> ·
+  <a href="https://www.observe-demo.nestjs.com/dashboard"><b>Live demo</b></a> ·
   <a href="https://observe.nestjs.com"><b>Website</b></a> ·
   <a href="https://docs.nestjs.com">Documentation</a>
 </p>
@@ -50,7 +50,7 @@ shortcut.
 
 ## Seeing it before installing
 
-**[observe-demo.nestjs.com](https://observe-demo.nestjs.com)** is the whole
+**[observe-demo.nestjs.com](https://www.observe-demo.nestjs.com/dashboard)** is the whole
 dashboard running over a generated dataset from a busy service — real request
 volumes, traces with waterfalls, errors, jobs and alerts. No signup, nothing to
 install.
@@ -235,7 +235,7 @@ const { createObserveModule } = require("@nestjs/observe");
 ## Stay in touch
 
 - Dashboard — [observe.nestjs.com](https://observe.nestjs.com)
-- Live demo — [observe-demo.nestjs.com](https://observe-demo.nestjs.com)
+- Live demo — [observe-demo.nestjs.com](https://www.observe-demo.nestjs.com/dashboard)
 - Documentation — [docs.nestjs.com](https://docs.nestjs.com)
 - Twitter — [@nestframework](https://twitter.com/nestframework)
 
