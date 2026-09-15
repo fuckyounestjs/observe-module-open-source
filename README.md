@@ -1,23 +1,59 @@
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <a href="https://observe.nestjs.com" target="_blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="NestJS Logo" /></a>
 </p>
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore"><img src="https://img.shields.io/npm/v/@nestjs/common.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore"><img src="https://img.shields.io/npm/l/@nestjs/common.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-  <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
+<p align="center">Auto-instrumented observability for <a href="https://nestjs.com" target="_blank">NestJS</a> applications — traces, errors, logs, jobs and profiles, with no manual span wiring.</p>
 
-## Description
+<p align="center">
+<a href="https://www.npmjs.com/package/@nestjs/observe"><img src="https://img.shields.io/npm/v/@nestjs/observe.svg" alt="NPM Version" /></a>
+<a href="https://www.npmjs.com/package/@nestjs/observe"><img src="https://img.shields.io/npm/dm/@nestjs/observe.svg" alt="NPM Downloads" /></a>
+<a href="https://www.npmjs.com/package/@nestjs/observe"><img src="https://img.shields.io/npm/l/@nestjs/observe.svg" alt="Package License" /></a>
+</p>
 
-`@nestjs/observe` is an observability module for [NestJS](https://nestjs.com) applications. It instruments HTTP, GraphQL, microservice (RPC), BullMQ queue handlers, and `@nestjs/schedule` cron/interval/timeout jobs, collects traces, runtime metrics, custom metrics, and CPU profiles, and ships them to a collector from a detached worker thread so the request path stays untouched.
+<p align="center">
+  <a href="https://observe-demo.nestjs.com"><b>Live demo</b></a> ·
+  <a href="https://observe.nestjs.com"><b>Website</b></a> ·
+  <a href="https://docs.nestjs.com">Documentation</a>
+</p>
+
+## What it is
+
+`@nestjs/observe` instruments a NestJS application from the inside. It hooks
+into Nest's own request lifecycle — controllers, interceptors, guards, queue
+consumers, resolvers — rather than wrapping a generic Node.js agent around the
+framework, so a trace is named in the vocabulary you wrote the code in: classes
+and methods, not just HTTP routes.
+
+Install it, set two environment variables, and the application starts reporting:
+
+- **Requests, jobs and RPC calls** — HTTP, GraphQL, microservices (RPC/gRPC),
+  BullMQ consumers and `@nestjs/schedule` cron, interval and timeout jobs.
+- **Distributed traces** with per-span self time, correlated across services.
+- **Errors**, grouped by fingerprint, with the source frame and the trace that
+  produced them.
+- **Logs**, correlated to the request that wrote them.
+- **Runtime and custom metrics**, plus on-demand **CPU profiles**.
+
+Telemetry is serialised on a detached worker thread and shipped from there, so
+the request path is untouched by the reporting.
+
+### Why not just OpenTelemetry?
+
+OpenTelemetry is the right answer when you need vendor neutrality across a
+polyglot estate, and this agent is not a replacement for it. It is a different
+trade: no collector to run, no exporter pipeline to configure, no manual
+instrumentation for the framework's own lifecycle — and spans named after your
+Nest classes and methods, which generic Node.js instrumentation cannot produce
+because it cannot see them. If you would otherwise spend a week wiring a
+collector and still not know which provider spent the time, this is the
+shortcut.
+
+## Seeing it before installing
+
+**[observe-demo.nestjs.com](https://observe-demo.nestjs.com)** is the whole
+dashboard running over a generated dataset from a busy service — real request
+volumes, traces with waterfalls, errors, jobs and alerts. No signup, nothing to
+install.
 
 ```bash
 $ npm install @nestjs/observe
@@ -198,9 +234,11 @@ const { createObserveModule } = require("@nestjs/observe");
 
 ## Stay in touch
 
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+- Dashboard — [observe.nestjs.com](https://observe.nestjs.com)
+- Live demo — [observe-demo.nestjs.com](https://observe-demo.nestjs.com)
+- Documentation — [docs.nestjs.com](https://docs.nestjs.com)
+- Twitter — [@nestframework](https://twitter.com/nestframework)
 
 ## License
 
-Nest is [MIT licensed](LICENSE).
+`@nestjs/observe` is [MIT licensed](LICENSE).

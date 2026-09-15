@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Observability and APM agent for NestJS - traces, runtime metrics, custom metrics and CPU profiles",
   "author": "Kamil Mysliwiec",
-  "homepage": "https://nestjs.com",
+  "homepage": "https://observe.nestjs.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nestjs/observe.git"
@@ -20,7 +20,13 @@
     "telemetry",
     "metrics",
     "profiling",
-    "instrumentation"
+    "instrumentation",
+    "monitoring",
+    "opentelemetry",
+    "distributed-tracing",
+    "error-tracking",
+    "logging",
+    "performance"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
