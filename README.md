@@ -97,8 +97,8 @@ import { ObserveModule } from "./observe";
 @Module({
   imports: [
     ObserveModule.forRoot({
-      appKey: process.env.OBSERVE_APP_KEY,
-      appSecret: process.env.OBSERVE_APP_SECRET,
+      appKey: process.env.OBSERVE_APP_KEY!,
+      appSecret: process.env.OBSERVE_APP_SECRET!,
       serviceId: "my-service",
     }),
   ],
