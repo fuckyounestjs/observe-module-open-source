@@ -42,6 +42,16 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
   // Null before `initializeWorker` and again after termination, which is what
   // the shutdown path below checks for.
   private worker: Worker | null = null;
+  /**
+   * Set while `onApplicationShutdown` is tearing the worker down.
+   *
+   * `Worker#terminate()` stops the thread abruptly, so Node reports exit code
+   * 1 - indistinguishable, at the `exit` listener, from a worker that died on
+   * its own. Without this flag a graceful shutdown logs an error and spawns a
+   * replacement thread that nothing will ever stop, which keeps the event loop
+   * alive and can hold the process open.
+   */
+  private isTerminating = false;
   private flushInterval: NodeJS.Timeout;
   private runtimeMetricsInterval: NodeJS.Timeout | null = null;
   private cpuProfiler: CpuProfilerService | null = null;
@@ -195,6 +205,7 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
       return;
     }
 
+    this.isTerminating = true;
     await this.worker.terminate();
 
     if (this.options.debug) {
@@ -267,6 +278,10 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
     this.worker.on("message", (msg) => this.handleMessage(msg));
     this.worker.on("error", (error) => this.handleError(error));
     this.worker.on("exit", (code) => {
+      if (this.isTerminating) {
+        this.logger.debug("Worker exited on shutdown.");
+        return;
+      }
       if (code !== 0) {
         this.logger.error(
           `Worker stopped with exit code ${code}. Restarting worker...`,
