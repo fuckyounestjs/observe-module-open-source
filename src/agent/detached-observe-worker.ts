@@ -1,4 +1,3 @@
-import { DEGRADED_MESSAGE_PREFIX } from "./degraded-ingest.protocol.js";
 import type { createTelemetrySanitizer } from "./telemetry-wire-contract.js";
 import type { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 
@@ -32,6 +31,13 @@ export const detachedObserveWorker = (
   const decoder = new TextDecoder();
 
   const telemetryUrl = `${config.endpoint}/applications/telemetry`;
+
+  // Arrives as data rather than being imported: this function body is eval'd
+  // with no module scope, so a reference to the exported constant is a
+  // `ReferenceError` here - and one thrown on the success path, where the
+  // catch below reads it as an unreachable collector. Passed in so the prefix
+  // has a single definition that `parseDegradedMessage` still matches.
+  const degradedPrefix: string = config.degradedPrefix;
 
   /**
    * Built here, used only when the collector answers 400. The shapes travel
@@ -357,7 +363,7 @@ export const detachedObserveWorker = (
 
       // A protocol line, not prose: the parent keys off the prefix and the
       // value, and is the side that decides what to do about it.
-      parentPort.postMessage(`${DEGRADED_MESSAGE_PREFIX}${degraded}`);
+      parentPort.postMessage(`${degradedPrefix}${degraded}`);
 
       parentPort.postMessage(
         "Tracing and instrumentation data sent successfully",
@@ -374,11 +380,27 @@ export const detachedObserveWorker = (
         ?.cause;
       const reason = cause?.code ?? cause?.message;
 
-      parentPort.postMessage(
-        `Error: Could not reach the collector at ${telemetryUrl}` +
-          (reason ? ` (${reason})` : "") +
-          `. Check that it is running and that \`endpoint\` points at it.`,
-      );
+      if (reason) {
+        parentPort.postMessage(
+          `Error: Could not reach the collector at ${telemetryUrl} (${reason}). ` +
+            `Check that it is running and that \`endpoint\` points at it.`,
+        );
+      } else {
+        // No `cause` at all, so this is almost certainly not a transport
+        // failure. The `try` above spans more than the request - decoding the
+        // buffer, reading the reply, and the `postMessage` calls - and a fault
+        // in any of those is a defect in this worker, not an unreachable
+        // collector. Naming it as one cost a release of silently dead degraded
+        // reporting behind a network error that was never a network error, and
+        // an operator can neither act on nor report the wrong claim.
+        const name = (err as Error)?.name ?? "Error";
+        const message = (err as Error)?.message ?? String(err);
+        parentPort.postMessage(
+          `Error: Telemetry worker failed while sending a batch to ${telemetryUrl} - ` +
+            `${name}: ${message}. This is most likely a fault in the observe agent ` +
+            `rather than a connectivity problem; please report it.`,
+        );
+      }
       // The batch is discarded rather than retried - `clearBuffer` below -
       // which is the right call for a fixed-size buffer the application is
       // still writing into: holding it for a retry would block every batch
