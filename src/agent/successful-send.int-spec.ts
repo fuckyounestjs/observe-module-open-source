@@ -30,7 +30,9 @@ const logged: string[] = [];
       appSecret: "test-secret",
       serviceId: "accepted-app",
       endpoint: COLLECTOR_URL,
-      flushInterval: 200,
+      // The agent's floor; anything lower is clamped to this with a warning.
+      // The 2s waits below expect at least one flush at this cadence.
+      flushInterval: 1000,
       runtimeMetrics: false,
       forwardLogs: false,
     }),
