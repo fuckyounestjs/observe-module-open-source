@@ -61,7 +61,10 @@ class OrdersMessageController {
   }
 
   @EventPattern("orders.created")
-  created() {
+  // The parameter is declared for the decorator's sake: its type requires a
+  // handler that accepts the event payload, and a zero-argument method fails
+  // to typecheck under `tsc` even though Nest calls it happily at runtime.
+  created(_event: unknown) {
     // Events are fire-and-forget: no response is sent, which is precisely why
     // the suite checks one is still traced.
   }
