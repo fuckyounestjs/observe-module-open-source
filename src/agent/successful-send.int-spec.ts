@@ -3,6 +3,11 @@ import { createServer, Server } from "node:http";
 import { NestFactory } from "@nestjs/core";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createObserveModule } from "../observe.module.js";
+import {
+  CapturedOutput,
+  captureOutput,
+  waitFor,
+} from "../testing/observe-harness.js";
 
 const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -21,7 +26,7 @@ class PingController {
 
 let collector: Server;
 let accepted = 0;
-const logged: string[] = [];
+let output: CapturedOutput;
 
 @Module({
   imports: [
@@ -31,7 +36,7 @@ const logged: string[] = [];
       serviceId: "accepted-app",
       endpoint: COLLECTOR_URL,
       // The agent's floor; anything lower is clamped to this with a warning.
-      // The 2s waits below expect at least one flush at this cadence.
+      // The waits in `beforeAll` allow several flushes at this cadence.
       flushInterval: 1000,
       runtimeMetrics: false,
       forwardLogs: false,
@@ -42,7 +47,8 @@ const logged: string[] = [];
 class AppModule {}
 
 let app: INestApplication;
-let baseUrl: string;
+
+const DEGRADED_NOTICE = "monthly event allowance";
 
 beforeAll(async () => {
   // Answers exactly as the real collector does for an account past its event
@@ -56,68 +62,55 @@ beforeAll(async () => {
       res.end(JSON.stringify({ degraded: true }));
     });
   });
-  await new Promise<void>((resolve) =>
-    collector.listen(COLLECTOR_PORT, resolve),
-  );
+  await new Promise<void>((resolve, reject) => {
+    collector.once("error", reject);
+    collector.listen(COLLECTOR_PORT, resolve);
+  });
 
-  for (const level of ["error", "warn", "log", "info"] as const) {
-    const original = console[level].bind(console);
-    console[level] = (...args: unknown[]) => {
-      logged.push(args.map(String).join(" "));
-      original(...(args as []));
-    };
-  }
-  // Both streams: Nest's logger sends `error` to stderr and `warn` to stdout,
-  // and this suite asserts on one of each.
-  for (const stream of [process.stderr, process.stdout] as const) {
-    const originalWrite = stream.write.bind(stream);
-    stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
-      logged.push(String(chunk));
-      return originalWrite(chunk as string, ...(rest as []));
-    }) as typeof stream.write;
-  }
+  output = captureOutput();
 
   app = await NestFactory.create(AppModule, {
     instrument: ObserveInstrument,
   });
   await app.listen(0);
-  baseUrl = await app.getUrl();
-});
+  const baseUrl = await app.getUrl();
 
-afterAll(async () => {
-  await app?.close();
-  await new Promise<void>((resolve) => collector.close(() => resolve()));
-});
-
-it("does not report an unreachable collector when the batch was accepted", async () => {
+  // Traffic, the collector's answer to it, and the parent's reaction to that
+  // answer - each awaited rather than slept for, so the suite runs at the
+  // speed of the flush and says what never arrived when something does not.
   for (let i = 0; i < 5; i++) {
     const res = await fetch(`${baseUrl}/ping`);
     expect(res.status).toBe(200);
   }
+  await waitFor(() => accepted > 0, 5_000, "the collector to accept a batch");
+  await waitFor(
+    () => output.lines.some((line) => line.includes(DEGRADED_NOTICE)),
+    5_000,
+    "the degraded notice to be logged",
+  );
+});
 
-  // Let the worker flush and be accepted.
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
-  expect(accepted).toBeGreaterThan(0);
+afterAll(async () => {
+  await app?.close();
+  output?.restore();
+  await new Promise<void>((resolve) => collector.close(() => resolve()));
+});
 
+it("does not report an unreachable collector when the batch was accepted", () => {
   // The collector answered 200. Anything claiming it could not be reached is
   // the worker misreporting one of its own exceptions as a network failure.
-  const unreachable = logged.filter((line) =>
+  const unreachable = output.lines.filter((line) =>
     line.includes("Could not reach the collector"),
   );
   expect(unreachable).toEqual([]);
 });
 
-it("acts on the degraded flag the accepted response carried", async () => {
-  for (let i = 0; i < 5; i++) {
-    await fetch(`${baseUrl}/ping`);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
-
-  // Proves the degraded line reached the parent at all: it travels on the same
-  // postMessage that used to throw, so a silent pass here means the whole
-  // withhold-spans path is dead.
-  const notices = logged.filter((line) =>
-    line.includes("monthly event allowance"),
-  );
+it("acts on the degraded flag the accepted response carried", () => {
+  // Proves the degraded line reached the parent at all: it travels on the
+  // same postMessage that used to throw, so a silent pass here means the
+  // whole withhold-spans path is dead. Once, however many degraded batches
+  // follow - the account sits in this state for days, and a line per flush
+  // would bury the one worth reading.
+  const notices = output.lines.filter((line) => line.includes(DEGRADED_NOTICE));
   expect(notices).toHaveLength(1);
 });

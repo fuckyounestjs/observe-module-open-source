@@ -1,6 +1,29 @@
 import type { createTelemetrySanitizer } from "./telemetry-wire-contract.js";
 import type { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 
+/**
+ * What arrives on `workerData.config`.
+ *
+ * Declared beside the code that reads it and `import type`d by the side that
+ * builds it (`detachedWorkerData`), so the two cannot drift: a key added here
+ * and forgotten there is a compile error, not a worker quietly posting
+ * `undefined` inside a protocol line.
+ */
+export interface DetachedWorkerConfig {
+  endpoint: string;
+  appKey?: string;
+  appSecret?: string;
+  /** Plain JSON, so it travels as data; the sanitizer that reads it travels as source. */
+  wireShapes: Parameters<typeof createTelemetrySanitizer>[0];
+  /** `DEGRADED_MESSAGE_PREFIX`, as data - see where it is read below. */
+  degradedPrefix: string;
+}
+
+export interface DetachedWorkerData {
+  sharedBuffer: SharedArrayBuffer;
+  config: DetachedWorkerConfig;
+}
+
 export const detachedObserveWorker = (
   // The factory's *source* is inlined as this argument when the worker script
   // is assembled (see `ObserveAgentWorker.initializeWorker`) - a stringified
@@ -23,7 +46,7 @@ export const detachedObserveWorker = (
   // `workerData` carries the shared buffer plus the collector config: the
   // stringified function has no access to this module's configuration, so
   // everything it needs must arrive here.
-  const { sharedBuffer, config } = workerData;
+  const { sharedBuffer, config } = workerData as DetachedWorkerData;
 
   const buffer = new Uint8Array(sharedBuffer);
   const lock = new Int32Array(sharedBuffer, 0, 1);
@@ -32,12 +55,30 @@ export const detachedObserveWorker = (
 
   const telemetryUrl = `${config.endpoint}/applications/telemetry`;
 
+  /**
+   * Why the endpoint can never be reached, decided once from its shape; null
+   * when it parses. `fetch` reports a malformed URL exactly as it reports a
+   * refused connection - a `TypeError` with a `cause` - so without this the
+   * operator is told to check that the collector is running when the fix is
+   * the `endpoint` option. `new URL` alone does not settle it: a scheme-less
+   * "localhost:4000" parses, with "localhost" as the scheme.
+   */
+  const endpointProblem = (() => {
+    try {
+      const { protocol } = new URL(telemetryUrl);
+      return protocol === "http:" || protocol === "https:"
+        ? null
+        : `its scheme is "${protocol}" rather than http: or https:`;
+    } catch {
+      return "it is not a valid URL";
+    }
+  })();
+
   // Arrives as data rather than being imported: this function body is eval'd
-  // with no module scope, so a reference to the exported constant is a
-  // `ReferenceError` here - and one thrown on the success path, where the
-  // catch below reads it as an unreachable collector. Passed in so the prefix
-  // has a single definition that `parseDegradedMessage` still matches.
-  const degradedPrefix: string = config.degradedPrefix;
+  // with no module scope, so a reference to the exported constant would be a
+  // `ReferenceError` here. Passed in so the prefix has a single definition
+  // that `parseDegradedMessage` still matches.
+  const degradedPrefix = config.degradedPrefix;
 
   /**
    * Built here, used only when the collector answers 400. The shapes travel
@@ -182,12 +223,11 @@ export const detachedObserveWorker = (
       }),
     );
 
-  const postBatch = async (json: string) =>
-    fetch(telemetryUrl, {
-      method: "POST",
-      headers,
-      body: await gzipAsync(json),
-    });
+  /** The request and nothing else, so what it throws is a transport failure. */
+  const post = (body: Buffer) =>
+    fetch(telemetryUrl, { method: "POST", headers, body });
+
+  const postBatch = async (json: string) => post(await gzipAsync(json));
 
   /**
    * Last resort for a 400: brings the batch into contract entry by entry and
@@ -278,8 +318,40 @@ export const detachedObserveWorker = (
       // Skip the first 4 bytes (lock) and the next 4 bytes (length)
       const jsonBytes = buffer.slice(8, 8 + jsonLength);
       const jsonStr = decoder.decode(jsonBytes);
+      const compressed = await gzipAsync(jsonStr);
 
-      const response = await postBatch(jsonStr);
+      // Only the request is in this `try`, so anything it throws is a
+      // transport failure by construction and the outer catch is left for
+      // faults in this worker. Telling the two apart by the shape of the error
+      // instead - `fetch` puts ECONNREFUSED and friends on `err.cause` - holds
+      // only until the first exception without one, such as a timeout signal
+      // on the request, which would then be reported as an agent bug.
+      let response: Awaited<ReturnType<typeof fetch>>;
+      try {
+        response = await post(compressed);
+      } catch (err) {
+        // `fetch` reports every transport failure as the same opaque "fetch
+        // failed" and puts the reason - ECONNREFUSED, ENOTFOUND, a TLS error -
+        // on `err.cause`. Reporting only `err.message` would tell the operator
+        // nothing: not what went wrong, and not which URL was tried.
+        const cause = (err as { cause?: { code?: string; message?: string } })
+          ?.cause;
+        const reason = cause?.code ?? cause?.message;
+        parentPort.postMessage(
+          endpointProblem
+            ? `Error: Could not send telemetry: \`endpoint\` is set to ` +
+                `${JSON.stringify(config.endpoint)} and ${endpointProblem}. ` +
+                `Fix the endpoint option.`
+            : `Error: Could not reach the collector at ${telemetryUrl}` +
+                (reason ? ` (${reason})` : "") +
+                `. Check that it is running and that \`endpoint\` points at it.`,
+        );
+        // Discarded rather than retried - `clearBuffer` in `finally` - which
+        // is the right call for a fixed-size buffer the application is still
+        // writing into: holding it for a retry would block every batch behind
+        // an unreachable collector.
+        return true;
+      }
 
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
@@ -370,41 +442,23 @@ export const detachedObserveWorker = (
       );
       return true;
     } catch (err) {
-      // `fetch` reports every transport failure as the same opaque "fetch
-      // failed", and puts the reason - ECONNREFUSED, ENOTFOUND, a TLS error -
-      // on `err.cause`. Reporting only `err.message` therefore tells the
-      // operator nothing: not what went wrong, and not which URL was tried.
-      // The 401/403 branch above already names what to check; this does the
-      // same for the case where the collector was never reached.
-      const cause = (err as { cause?: { code?: string; message?: string } })
-        ?.cause;
-      const reason = cause?.code ?? cause?.message;
-
-      if (reason) {
-        parentPort.postMessage(
-          `Error: Could not reach the collector at ${telemetryUrl} (${reason}). ` +
-            `Check that it is running and that \`endpoint\` points at it.`,
-        );
-      } else {
-        // No `cause` at all, so this is almost certainly not a transport
-        // failure. The `try` above spans more than the request - decoding the
-        // buffer, reading the reply, and the `postMessage` calls - and a fault
-        // in any of those is a defect in this worker, not an unreachable
-        // collector. Naming it as one cost a release of silently dead degraded
-        // reporting behind a network error that was never a network error, and
-        // an operator can neither act on nor report the wrong claim.
-        const name = (err as Error)?.name ?? "Error";
-        const message = (err as Error)?.message ?? String(err);
-        parentPort.postMessage(
-          `Error: Telemetry worker failed while sending a batch to ${telemetryUrl} - ` +
-            `${name}: ${message}. This is most likely a fault in the observe agent ` +
-            `rather than a connectivity problem; please report it.`,
-        );
-      }
-      // The batch is discarded rather than retried - `clearBuffer` below -
-      // which is the right call for a fixed-size buffer the application is
-      // still writing into: holding it for a retry would block every batch
-      // behind an unreachable collector.
+      // Not the request - that has its own catch above - so this is a fault
+      // in the worker itself: decoding the buffer, compressing, reading the
+      // reply or posting to the parent. Said so rather than blamed on the
+      // network: an operator can report a stack line, and can do nothing with
+      // the claim that a collector which just answered is unreachable.
+      const cause = (err as { cause?: unknown })?.cause;
+      const causeText =
+        cause instanceof Error || typeof cause === "string"
+          ? String(cause)
+          : undefined;
+      parentPort.postMessage(
+        `Error: Telemetry worker failed while sending a batch to ${telemetryUrl} - ` +
+          String(err) +
+          (causeText === undefined ? "" : ` (cause: ${causeText})`) +
+          `. This is most likely a fault in the observe agent rather than a ` +
+          `connectivity problem; please report it.`,
+      );
       return true;
     } finally {
       clearBuffer();

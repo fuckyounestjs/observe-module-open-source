@@ -3,6 +3,7 @@ import { createServer, Server } from "node:http";
 import { NestFactory } from "@nestjs/core";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createObserveModule } from "../observe.module.js";
+import { CapturedOutput, captureOutput } from "../testing/observe-harness.js";
 
 const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -21,7 +22,7 @@ class PingController {
 
 let collector: Server;
 let rejected = 0;
-const logged: string[] = [];
+let output: CapturedOutput;
 
 @Module({
   imports: [
@@ -52,20 +53,11 @@ beforeAll(async () => {
     res.writeHead(401, { "content-type": "application/json" });
     res.end(JSON.stringify({ message: "Unauthorized" }));
   });
-  await new Promise<void>((resolve) => collector.listen(COLLECTOR_PORT, resolve));
+  await new Promise<void>((resolve) =>
+    collector.listen(COLLECTOR_PORT, resolve),
+  );
 
-  for (const level of ["error", "warn", "log", "info"] as const) {
-    const original = console[level].bind(console);
-    console[level] = (...args: unknown[]) => {
-      logged.push(args.map(String).join(" "));
-      original(...(args as []));
-    };
-  }
-  const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
-    logged.push(String(chunk));
-    return originalWrite(chunk as string, ...(rest as []));
-  }) as typeof process.stderr.write;
+  output = captureOutput();
 
   app = await NestFactory.create(AppModule, {
     instrument: ObserveInstrument,
@@ -76,6 +68,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+  output?.restore();
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
@@ -108,7 +101,9 @@ it("keeps serving traffic while the collector rejects every batch", async () => 
   expect(rejected).toBeGreaterThan(1);
 
   // Said once, and it names the thing to fix - not one line per dropped batch.
-  const complaints = logged.filter((line) => line.includes("Telemetry rejected"));
+  const complaints = output.lines.filter((line) =>
+    line.includes("Telemetry rejected"),
+  );
   expect(complaints).toHaveLength(1);
   expect(complaints[0]).toContain("appKey");
 
@@ -116,6 +111,8 @@ it("keeps serving traffic while the collector rejects every batch", async () => 
   // and treating that as a failure used to log an error and respawn a worker
   // thread during shutdown that nothing would ever stop.
   await closeApp();
-  const restarts = logged.filter((line) => line.includes("Restarting worker"));
+  const restarts = output.lines.filter((line) =>
+    line.includes("Restarting worker"),
+  );
   expect(restarts).toHaveLength(0);
 });

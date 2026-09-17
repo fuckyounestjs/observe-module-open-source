@@ -16,17 +16,12 @@ import {
   SpanSliceRecorder,
 } from "../profiling/span-slice-recorder.js";
 import { NodeRuntimeMetricsService } from "../services/node-runtime-metrics.service.js";
-import { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
-import { detachedObserveWorker } from "./detached-observe-worker.js";
+import { parseDegradedMessage } from "./degraded-ingest.protocol.js";
 import {
-  DEGRADED_MESSAGE_PREFIX,
-  parseDegradedMessage,
-} from "./degraded-ingest.protocol.js";
+  detachedWorkerData,
+  detachedWorkerSource,
+} from "./detached-observe-worker.assembly.js";
 import { ObserveAgentSharedBuffer } from "./observe-agent.shared-buffer.js";
-import {
-  createTelemetrySanitizer,
-  SECTION_SHAPES,
-} from "./telemetry-wire-contract.js";
 
 const DEFAULT_RUNTIME_METRICS_INTERVAL = 60000; // 60 seconds
 const MIN_RUNTIME_METRICS_INTERVAL = 30000; // 30 seconds
@@ -258,30 +253,20 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
 
   initializeWorker() {
     this.warnIfCredentialsSentInClear();
-    // The sanitizer factory and the refusal describer are inlined as the
-    // worker function's arguments: the worker is eval'd source with no module
-    // scope, so code it needs has to travel as source, and data (the wire
-    // shapes are plain JSON) as `workerData`. Both are written self-contained
-    // for exactly this.
-    this.worker = new Worker(
-      `(${detachedObserveWorker.toString()})(${createTelemetrySanitizer.toString()}, ${describeIngestRefusal.toString()})`,
-      {
-        eval: true,
-        workerData: {
-          sharedBuffer: this.observeAgentSharedBuffer.sharedBuffer,
-          // Passed in rather than read from the environment inside the worker:
-          // the worker is a stringified function with no access to this
-          // module's configuration.
-          config: {
-            endpoint: this.endpoint,
-            appKey: this.options.appKey,
-            appSecret: this.options.appSecret,
-            wireShapes: SECTION_SHAPES,
-            degradedPrefix: DEGRADED_MESSAGE_PREFIX,
-          },
-        },
-      },
-    );
+    // Source and data both come from the assembly module, which the worker's
+    // tests build from too: the worker is eval'd with no module scope, so the
+    // code it needs travels as stringified functions and the configuration as
+    // `workerData`, and the one place that puts them together is the one
+    // place a forgotten value can be caught.
+    this.worker = new Worker(detachedWorkerSource(), {
+      eval: true,
+      workerData: detachedWorkerData({
+        sharedBuffer: this.observeAgentSharedBuffer.sharedBuffer,
+        endpoint: this.endpoint,
+        appKey: this.options.appKey,
+        appSecret: this.options.appSecret,
+      }),
+    });
 
     this.worker.on("message", (msg) => this.handleMessage(msg));
     this.worker.on("error", (error) => this.handleError(error));

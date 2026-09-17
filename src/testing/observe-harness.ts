@@ -169,6 +169,67 @@ export async function waitForJobSnapshot(
   );
 }
 
+/** Polls `condition` to a deadline; throws, naming `what`, if it never holds. */
+export async function waitFor(
+  condition: () => boolean,
+  timeoutMs: number,
+  what: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for ${what}.`);
+}
+
+export interface CapturedOutput {
+  /** Every chunk written to stdout or stderr since the capture began. */
+  readonly lines: string[];
+  /** Puts the original stream methods back. */
+  restore(): void;
+}
+
+/**
+ * Records what the process writes to stdout and stderr, from now until
+ * `restore`.
+ *
+ * Both streams, and only the streams: Nest's `ConsoleLogger` writes straight
+ * to them - errors to stderr, everything else to stdout - and never through
+ * `console.*`, so a patched console sees nothing of what the agent logs.
+ * Restored explicitly rather than left for process exit: the int suites run
+ * one file per process, but a wrapper left in place would stack under the
+ * next capture in the same file and record every line twice.
+ */
+export function captureOutput(): CapturedOutput {
+  const lines: string[] = [];
+  const restores: Array<() => void> = [];
+
+  for (const stream of [process.stdout, process.stderr] as const) {
+    const original = stream.write;
+    stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      lines.push(String(chunk));
+      return Reflect.apply(original, stream, [chunk, ...rest]);
+    }) as typeof stream.write;
+    restores.push(() => {
+      stream.write = original;
+    });
+  }
+
+  return {
+    lines,
+    restore: () => {
+      for (const restore of restores) {
+        restore();
+      }
+    },
+  };
+}
+
 /** A free port, so parallel suites and a busy machine cannot collide. */
 export async function freePort(): Promise<number> {
   const net = await import("node:net");
