@@ -54,6 +54,27 @@
         "typescript/no-empty-function": "off",
         "unicorn/consistent-function-scoping": "off"
       }
+    },
+    {
+      "files": [
+        "src/agent/detached-observe-worker.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "*"
+                ],
+                "allowTypeImports": true,
+                "message": "This file is stringified and eval'd as a worker: value imports do not exist at runtime. Pass data via workerData, code as a stringified argument."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

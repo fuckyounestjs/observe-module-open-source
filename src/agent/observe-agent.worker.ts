@@ -18,7 +18,10 @@ import {
 import { NodeRuntimeMetricsService } from "../services/node-runtime-metrics.service.js";
 import { describeIngestRefusal } from "../utils/ingest-refusal.util.js";
 import { detachedObserveWorker } from "./detached-observe-worker.js";
-import { parseDegradedMessage } from "./degraded-ingest.protocol.js";
+import {
+  DEGRADED_MESSAGE_PREFIX,
+  parseDegradedMessage,
+} from "./degraded-ingest.protocol.js";
 import { ObserveAgentSharedBuffer } from "./observe-agent.shared-buffer.js";
 import {
   createTelemetrySanitizer,
@@ -270,6 +273,7 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
             appKey: this.options.appKey,
             appSecret: this.options.appSecret,
             wireShapes: SECTION_SHAPES,
+            degradedPrefix: DEGRADED_MESSAGE_PREFIX,
           },
         },
       },
