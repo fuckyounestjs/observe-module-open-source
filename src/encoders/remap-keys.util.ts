@@ -19,6 +19,12 @@ export function remapKeys<TSource extends object, TEncoded>(
   // on the prototype where neither form can see them - those are copied across
   // explicitly by `CustomMetricsEncoder`.
   for (const key in source) {
+    // `hasOwn` rather than a truthiness check: `keyMap["toString"]` is the
+    // inherited function, and an attribute named that way would land under a
+    // key spelt from its source code.
+    if (!Object.hasOwn(keyMap, key)) {
+      continue;
+    }
     const mapped = keyMap[key];
     if (mapped) {
       encoded[mapped] = source[key];

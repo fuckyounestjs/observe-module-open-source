@@ -4,6 +4,7 @@ import { Gauge } from "../custom-metrics/gauge.js";
 import { Summary } from "../custom-metrics/summary.js";
 import { CustomMetricsEncoder } from "./custom-metrics.encoder.js";
 import { JobSnapshotEncoder } from "./job-snapshot.encoder.js";
+import { remapKeys } from "./remap-keys.util.js";
 import { RequestSnapshotEncoder } from "./request-snapshot.encoder.js";
 import { RuntimeMetricsEncoder } from "./runtime-metrics.encoder.js";
 
@@ -12,6 +13,22 @@ import { RuntimeMetricsEncoder } from "./runtime-metrics.encoder.js";
  * connects the two but agreement on single-letter keys, so these assert the
  * shape the agent actually emits - and, at the end, that the API accepts it.
  */
+describe("remapKeys", () => {
+  it("copies only the keys the map names", () => {
+    expect(
+      remapKeys({ name: "orders", extra: 1 }, { name: "n" }),
+    ).toEqual({ n: "orders" });
+  });
+
+  it("ignores a source key that only the map's prototype answers to", () => {
+    // `keyMap["toString"]` is a function, and truthy; without an own-key
+    // check it would become the output key, spelt from its source code.
+    const source = JSON.parse('{"toString": "x", "name": "orders"}');
+
+    expect(remapKeys(source, { name: "n" })).toEqual({ n: "orders" });
+  });
+});
+
 describe("CustomMetricsEncoder", () => {
   it("shortens the modelled keys", () => {
     const counter = new Counter("orders", "Orders placed");

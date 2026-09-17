@@ -213,6 +213,14 @@ export function collectCodeFrames(
           if (isIgnored(original.file)) {
             continue;
           }
+          // And the containment check, when the map's `sources` entry is about
+          // to be read from disk rather than taken from `sourcesContent`. The
+          // compiled frame passed it; the path the map resolved it to is a
+          // different string from a different input, and a map is one more
+          // thing on disk that can say `../../../etc/passwd`.
+          if (!original.content && !isReadableSourcePath(original.file)) {
+            continue;
+          }
           file = original.file;
           line = original.line;
           // Prefer the map's embedded copy - it is the source this build was

@@ -354,6 +354,67 @@ describe("OperationTraceRegistry", () => {
       expect(root.error).toMatchObject({ message: "boom", cls: "Error" });
     });
 
+    it("redacts secrets out of the message and stack by default", async () => {
+      startRequest("e-redact");
+      const spanId = registry.internalStartTraceStep(
+        "e-redact",
+        "Svc",
+        "root",
+        undefined,
+      );
+      const error = new Error(
+        "connect failed: postgres://app:password=hunter2@db/orders",
+      );
+      error.stack = `Error: ${error.message}\n    at Svc.root (/app/svc.ts:1:1)\n    at token=eyJhbGciOi.eyJzdWIiOi.sig`;
+      registry.internalEndTraceStep(
+        "e-redact",
+        spanId,
+        "Svc",
+        "root",
+        spanId,
+        error,
+      );
+      registry.endTrace("e-redact");
+
+      const snapshot = await registry.pluckSnapshot("e-redact");
+      const root = snapshot!.traces[0] as {
+        error?: { message: string; stack?: string };
+      };
+
+      expect(root.error!.message).toBe(
+        "connect failed: postgres://app:password=[REDACTED]",
+      );
+      expect(root.error!.stack).not.toContain("hunter2");
+      expect(root.error!.stack).not.toContain("eyJhbGciOi");
+      // The frames themselves survive: they are what the stack is for.
+      expect(root.error!.stack).toContain("at Svc.root (/app/svc.ts:1:1)");
+    });
+
+    it("ships the error verbatim once redaction is switched off", async () => {
+      registry.configureRedaction(null);
+      startRequest("e-raw");
+      const spanId = registry.internalStartTraceStep(
+        "e-raw",
+        "Svc",
+        "root",
+        undefined,
+      );
+      registry.internalEndTraceStep(
+        "e-raw",
+        spanId,
+        "Svc",
+        "root",
+        spanId,
+        new Error("password=hunter2"),
+      );
+      registry.endTrace("e-raw");
+
+      const snapshot = await registry.pluckSnapshot("e-raw");
+      const root = snapshot!.traces[0] as { error?: { message: string } };
+
+      expect(root.error!.message).toBe("password=hunter2");
+    });
+
     it("marks a nested span as failed without repeating the payload", async () => {
       startRequest("e2");
       const parent = registry.internalStartTraceStep(

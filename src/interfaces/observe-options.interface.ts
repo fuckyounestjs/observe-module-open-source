@@ -340,12 +340,14 @@ export interface ObserveOptions {
   forwardLogs?: boolean;
 
   /**
-   * How log lines are scrubbed before leaving the process.
+   * How log lines and error payloads are scrubbed before leaving the process.
    *
-   * Redaction is on by default whenever `forwardLogs` is enabled - forwarding
-   * logs moves them onto someone else's disk, and secrets reach logs by accident
-   * far more often than by design, so the safe behaviour is the one you get
-   * without asking. Set `enabled: false` to turn it off deliberately.
+   * Applies to forwarded log lines (when `forwardLogs` is enabled) and to the
+   * message and stack of every error attached to a trace - a database error
+   * quoting its connection string, a failed request quoting a URL with a token
+   * in it. Both move text onto someone else's disk, and secrets reach them by
+   * accident far more often than by design, so the safe behaviour is the one
+   * you get without asking. Set `enabled: false` to turn it off deliberately.
    */
   redaction?: RedactionOptions;
 

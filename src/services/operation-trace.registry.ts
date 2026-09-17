@@ -12,6 +12,7 @@ import {
 import { TraceSpanDelegate } from "../trace-span.delegate.js";
 import { KeyOf } from "../types/key-of.type.js";
 import { CodeFrame, collectCodeFrames } from "../utils/source-context.util.js";
+import { LogRedactor } from "../utils/log-redactor.js";
 import { CALLER_METADATA_KEY } from "../observe.constants.js";
 import {
   collapseRepeatedSpans,
@@ -77,6 +78,17 @@ export class OperationTraceRegistry {
    */
   private spanCollapse: SpanCollapseSettings | undefined =
     DEFAULT_SPAN_COLLAPSE;
+  /**
+   * Scrubs error messages and stacks before they are attached to a span.
+   *
+   * On by default, with the same defaults the log forwarder uses, for the
+   * same reason: an error is at least as likely a carrier of a secret as a
+   * log line - a driver error quoting a DSN with the password in it, a fetch
+   * failure quoting a URL with a token in it - and an error payload is shipped
+   * whether or not log forwarding is on. Null only when redaction has been
+   * switched off explicitly.
+   */
+  private redactor: LogRedactor | null = new LogRedactor();
 
   constructor(
     private readonly als: AsyncLocalStorage<
@@ -96,14 +108,35 @@ export class OperationTraceRegistry {
   }
 
   /**
+   * Applies the resolved `redaction` options to error payloads, or switches
+   * redaction off with `null`. Called by the module alongside
+   * `configureSpanCollapse`, for the same reason.
+   */
+  configureRedaction(redactor: LogRedactor | null): void {
+    this.redactor = redactor;
+  }
+
+  /**
    * Builds the error payload attached to a span or snapshot, including the source
    * around each in-app frame when source context is enabled.
    */
   private toErrorPayload(error: Error | string | object) {
-    const payload =
+    const raw =
       error instanceof Error
         ? { message: error.message, stack: error.stack }
         : { message: String(error), stack: undefined };
+    // Redacted here, at the one point every error payload passes through,
+    // and before code frames are read: the frames are keyed off the stack's
+    // file positions, which the redactor leaves alone.
+    const payload = this.redactor
+      ? {
+          message: this.redactor.redactMessage(raw.message),
+          stack:
+            raw.stack === undefined
+              ? undefined
+              : this.redactor.redactMessage(raw.stack),
+        }
+      : raw;
 
     const result: {
       cls?: string;

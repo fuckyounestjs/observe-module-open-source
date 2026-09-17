@@ -40,6 +40,7 @@ import { TracerService } from "./services/tracer.service.js";
 import { KeyOf } from "./types/key-of.type.js";
 import { assertModuleOptions } from "./utils/assert-module-options.util.js";
 import { defaultTraceIdGenerator } from "./utils/default-trace-id-generator.util.js";
+import { LogRedactor } from "./utils/log-redactor.js";
 
 /**
  * All three async providers are optional on the options type, but one of them
@@ -86,11 +87,17 @@ export function createObserveModule<Store extends Record<string, unknown>>(
         provide: OperationTraceRegistry,
         // The instance already exists (the instrumentation hook below holds
         // it), so this is the one moment the resolved `ObserveOptions` and the
-        // registry meet: `spanCollapse` is applied here. Optional because
-        // `ASSERT_MODULE_OPTIONS` owns the missing-options error.
+        // registry meet: `spanCollapse` and `redaction` are applied here.
+        // Optional because `ASSERT_MODULE_OPTIONS` owns the missing-options
+        // error.
         useFactory: (observeOptions?: ObserveModuleOptionsWithDefaults) => {
           operationTraceRegistry.configureSpanCollapse(
             resolveSpanCollapseSettings(observeOptions?.spanCollapse),
+          );
+          operationTraceRegistry.configureRedaction(
+            observeOptions?.redaction?.enabled === false
+              ? null
+              : new LogRedactor(observeOptions?.redaction),
           );
           return operationTraceRegistry;
         },

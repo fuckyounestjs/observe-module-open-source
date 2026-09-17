@@ -1,5 +1,6 @@
 import {
   clearGraphQLOperationCache,
+  graphQLOperationCacheSize,
   parseGraphQLOperation,
   toResolveInfoLike,
 } from "./graphql-operation-parser.js";
@@ -175,6 +176,37 @@ describe("parseGraphQLOperation", () => {
         parseGraphQLOperation("# top secret\n{ orders { id } }")
           ?.sanitizedDocument,
       ).toBe("{ orders { id } }");
+    });
+
+    it("caps what it records of an oversized document", () => {
+      // The document is a request body, chosen by the client; the shape it
+      // leaves in the trace must not be able to overflow the batch.
+      const fields = Array.from({ length: 4000 }, (_, i) => `f${i}`).join(" ");
+      const document = `{ orders { ${fields} } }`;
+
+      const recorded = parseGraphQLOperation(document)!.sanitizedDocument;
+
+      expect(recorded.length).toBe(8 * 1024);
+      expect(recorded.endsWith("... [truncated by observe]")).toBe(true);
+      expect(recorded.startsWith("{ orders { f0 f1")).toBe(true);
+    });
+  });
+
+  describe("cache", () => {
+    it("remembers an ordinary document", () => {
+      parseGraphQLOperation("{ orders { id } }");
+
+      expect(graphQLOperationCacheSize()).toBe(1);
+    });
+
+    it("does not remember a document past the size cap", () => {
+      // Entries are counted but not sized; a client could otherwise fill the
+      // cache with 512 multi-megabyte keys.
+      const fields = Array.from({ length: 8000 }, (_, i) => `f${i}`).join(" ");
+      const parsed = parseGraphQLOperation(`{ orders { ${fields} } }`);
+
+      expect(parsed?.fieldName).toBe("orders");
+      expect(graphQLOperationCacheSize()).toBe(0);
     });
   });
 });

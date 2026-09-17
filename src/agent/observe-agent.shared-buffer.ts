@@ -34,11 +34,13 @@ const DEFAULT_MAX_SNAPSHOTS_PER_TRANSACTION = 1000;
 /**
  * Caps on the log portion of a batch.
  *
- * Logs are the only unbounded input here - snapshots are gated by
- * `maxTracesPerBatch`, but a chatty service (or one stuck in a retry loop)
- * produces log lines with no natural ceiling. Left uncapped they grow the
- * payload past `SHARED_BUFFER_SIZE`, and `encodeAndWrite` then throws for the
- * whole batch, so noisy logging silently costs you the traces and metrics too.
+ * Logs are the one input with no natural ceiling - snapshots are gated by
+ * `maxTracesPerBatch` and their largest caller-chosen field, the GraphQL
+ * document, is capped where it is parsed - but a chatty service (or one stuck
+ * in a retry loop) produces log lines without limit. Left uncapped they grow
+ * the payload past `SHARED_BUFFER_SIZE`, and `encodeAndWrite` then throws for
+ * the whole batch, so noisy logging silently costs you the traces and metrics
+ * too.
  *
  * Both limits are needed: the count bounds ordinary chatter, and the per-entry
  * length bounds the single pathological line - a serialised payload dump or a

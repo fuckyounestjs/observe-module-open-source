@@ -8,6 +8,7 @@ import { createObserveModule } from "./observe.module.js";
 import { OBSERVE_OPTIONS } from "./observe.constants.js";
 import { DEFAULT_SPAN_COLLAPSE } from "./services/collapse-repeated-spans.util.js";
 import { OperationTraceRegistry } from "./services/operation-trace.registry.js";
+import { LogRedactor } from "./utils/log-redactor.js";
 
 /**
  * The instance decorator handed to NestFactory. Bootstrap passes *every*
@@ -318,5 +319,59 @@ describe("createObserveModule#spanCollapse wiring", () => {
     );
 
     expect(settingsOf(registry)).toEqual({ threshold: 7, keepSlowest: 1 });
+  });
+});
+
+/**
+ * Same arrangement for `redaction`: the registry redacts error payloads with
+ * its own defaults from construction, and the provider is where the options a
+ * deployment configured replace them - or switch them off.
+ */
+describe("createObserveModule#redaction wiring", () => {
+  const credentials = { appKey: "key", appSecret: "secret", serviceId: "svc" };
+
+  const redactorOf = (registry: OperationTraceRegistry) =>
+    (registry as unknown as { redactor: LogRedactor | null }).redactor;
+
+  const bootWith = async (module: unknown) => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [module as never],
+    }).compile();
+    return moduleRef.get(OperationTraceRegistry, { strict: false });
+  };
+
+  it("redacts with the defaults when forRoot names nothing", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(ObserveModule.forRoot(credentials));
+
+    expect(redactorOf(registry)?.redactMessage("password=x")).toBe(
+      "password=[REDACTED]",
+    );
+  });
+
+  it("passes forRoot settings through to the registry", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(
+      ObserveModule.forRoot({
+        ...credentials,
+        redaction: { replacement: "***" },
+      }),
+    );
+
+    expect(redactorOf(registry)?.redactMessage("password=x")).toBe(
+      "password=***",
+    );
+  });
+
+  it("switches redaction off through forRoot", async () => {
+    const { ObserveModule } = createObserveModule();
+
+    const registry = await bootWith(
+      ObserveModule.forRoot({ ...credentials, redaction: { enabled: false } }),
+    );
+
+    expect(redactorOf(registry)).toBeNull();
   });
 });

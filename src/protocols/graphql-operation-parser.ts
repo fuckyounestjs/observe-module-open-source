@@ -23,12 +23,30 @@ const ROOT_TYPE_BY_KEYWORD: Record<string, string> = {
 
 /**
  * Parsed results are cached: a client sends the same handful of documents over
- * and over, and re-scanning each one per request is pure waste. Bounded because
- * the key is attacker-supplied - a client sending unique documents must not be
- * able to grow this without limit.
+ * and over, and re-scanning each one per request is pure waste. Bounded in
+ * both dimensions because the key is attacker-supplied: the entry count stops
+ * a client sending unique documents from growing the map without limit, and
+ * the per-entry size stops 512 entries from being 512 multi-megabyte strings.
+ * A document past the size cap is still parsed, just not remembered - a
+ * client that sends one is not a client whose documents repeat.
  */
 const CACHE_LIMIT = 512;
+const MAX_CACHEABLE_DOCUMENT_LENGTH = 16 * 1024;
 const cache = new Map<string, ParsedGraphQLOperation | undefined>();
+
+/**
+ * Cap on the document shape a trace records.
+ *
+ * `sanitizedDocument` travels as the snapshot's `originalUrl`, and a query is
+ * a request body, not a URL: nothing upstream bounds its size the way the
+ * HTTP parser bounds a header. Left uncapped, one multi-megabyte document
+ * from an unauthenticated client overflows the shared buffer and takes every
+ * other trace, metric and log in that batch down with it. Same order of size
+ * as the log-entry cap, for the same reason: past this a document is no
+ * longer something a reader scans, and the collector indexes it by trigram.
+ */
+const MAX_SANITIZED_DOCUMENT_LENGTH = 8 * 1024;
+const TRUNCATION_SUFFIX = "... [truncated by observe]";
 
 export interface ParsedGraphQLOperation {
   /** The root type the operation resolves against - `Query`, `Mutation`, `Subscription`. */
@@ -91,6 +109,9 @@ export function parseGraphQLOperation(
     return cache.get(document);
   }
   const parsed = scan(document);
+  if (document.length > MAX_CACHEABLE_DOCUMENT_LENGTH) {
+    return parsed;
+  }
   if (cache.size >= CACHE_LIMIT) {
     // Oldest entry out. Map iterates in insertion order, so this is the least
     // recently *added* document rather than the least recently used one - close
@@ -104,6 +125,11 @@ export function parseGraphQLOperation(
 /** Test seam: the cache is process-wide and would leak between cases. */
 export function clearGraphQLOperationCache(): void {
   cache.clear();
+}
+
+/** Test seam: what the cache holds is otherwise unobservable from outside. */
+export function graphQLOperationCacheSize(): number {
+  return cache.size;
 }
 
 function scan(document: string): ParsedGraphQLOperation | undefined {
@@ -177,8 +203,18 @@ function toOperation(
     operationName: words[0] ? words[1] : undefined,
     // Whitespace is collapsed only here, at the end: `source` positions have to
     // stay valid while the scan is still reading from it.
-    sanitizedDocument: source.replace(/\s+/g, " ").trim(),
+    sanitizedDocument: truncate(source.replace(/\s+/g, " ").trim()),
   };
+}
+
+function truncate(document: string): string {
+  if (document.length <= MAX_SANITIZED_DOCUMENT_LENGTH) {
+    return document;
+  }
+  return (
+    document.slice(0, MAX_SANITIZED_DOCUMENT_LENGTH - TRUNCATION_SUFFIX.length) +
+    TRUNCATION_SUFFIX
+  );
 }
 
 /**
