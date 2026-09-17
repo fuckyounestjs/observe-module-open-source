@@ -44,7 +44,73 @@ describe("ObserveAgentWorker options", () => {
 
   afterEach(async () => {
     await worker?.onApplicationShutdown();
+    vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  describe("flushInterval", () => {
+    // The flush itself touches the shared buffer, which is a stub here; only
+    // the cadence the timer was armed with is under test.
+    const armFlush = (options: Partial<ObserveModuleOptionsWithDefaults>) => {
+      vi.useFakeTimers();
+      build(options);
+      const flush = vi
+        .spyOn(worker, "flush")
+        .mockImplementation(() => undefined);
+      const warn = vi
+        .spyOn(
+          (worker as unknown as { logger: { warn: (m: string) => void } })
+            .logger,
+          "warn",
+        )
+        .mockImplementation(() => undefined);
+      worker.onModuleInit();
+      return { flush, warn };
+    };
+
+    it("flushes at the minimum cadence when asked for less", () => {
+      // Used to warn that the interval had been raised to 1s and then arm the
+      // timer with the original value anyway - `flushInterval: 50` flushed
+      // twenty times a second while claiming otherwise.
+      const { flush, warn } = armFlush({ flushInterval: 50 });
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Setting to minimum of 1000ms"),
+      );
+
+      vi.advanceTimersByTime(999);
+      expect(flush).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(flush).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1000);
+      expect(flush).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps an interval at or above the minimum as given", () => {
+      const { flush, warn } = armFlush({ flushInterval: 2500 });
+
+      expect(warn).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2499);
+      expect(flush).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(flush).toHaveBeenCalledTimes(1);
+    });
+
+    it("defaults to five seconds when the option is not set", () => {
+      const { flush, warn } = armFlush({});
+
+      expect(warn).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(4999);
+      expect(flush).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(flush).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("collects runtime metrics when asked by the new name", () => {

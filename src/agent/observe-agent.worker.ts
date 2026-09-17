@@ -69,12 +69,16 @@ export class ObserveAgentWorker implements OnModuleInit, OnApplicationShutdown {
   onModuleInit() {
     this.initializeWorker();
 
-    const flushIntervalTime =
+    let flushIntervalTime =
       this.options.flushInterval ?? DEFAULT_FLUSH_INTERVAL;
     if (flushIntervalTime < MIN_FLUSH_INTERVAL) {
       this.logger.warn(
         `Flush interval is too short (${flushIntervalTime}ms). Setting to minimum of ${MIN_FLUSH_INTERVAL}ms.`,
       );
+      // Clamp the value the timer is armed with, not just the recorded option:
+      // the warning above used to be a lie, and a `flushInterval: 50` flushed
+      // twenty times a second while claiming it had been raised to 1s.
+      flushIntervalTime = MIN_FLUSH_INTERVAL;
       this.options.flushInterval = MIN_FLUSH_INTERVAL;
     }
     this.flushInterval = setInterval(() => this.flush(), flushIntervalTime);
